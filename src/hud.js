@@ -16,8 +16,8 @@ const el = (tag, cls, parent, text) => {
 
 export class Hud {
   constructor(root) {
-    this.root = root;
-    root.innerHTML = '';
+    this.root = root || document.createElement('div');
+    this.root.innerHTML = '';
     this.state = {};
     // crosshair
     this.cross = el('div', 'cross', root);

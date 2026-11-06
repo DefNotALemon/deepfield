@@ -108,9 +108,11 @@ export class Player {
   // ── per-frame ────────────────────────────────────────────────────────────────────────────
   update(dt, ctx) {
     if (this.dead) { dt *= 0.35; }
-    const look = In.consume();
+    // read the press map without wiping it: the dive consumes interact/fire/bag/drop/tool itself before
+    // the player runs, so a click on loot never also becomes a gunshot
+    const look = In.pressed;
     const l = In.take();
-    if (look.back2) ctx.onPause && ctx.onPause();
+    if (look.back2) { In.pressed.back2 = false; ctx.onPause && ctx.onPause(); }
     if (!ctx.frozen) {
       this.yaw -= l.x * SENS * (this.aim ? 0.72 : 1);
       this.pitch -= l.y * SENS * (this.aim ? 0.72 : 1);
@@ -189,6 +191,7 @@ export class Player {
     } else if (!ctx.frozen && !busy && def && In.down.fire && this.fireT <= 0 && this.ammo > 0) {
       this.shoot(ctx, def);
     } else if (look.reload && def && this.ammo < this.mag) {
+      In.pressed.reload = false;
       this.reloadT = def.mag > 8 ? 2.2 : 1.7;
       ctx.sound && ctx.sound('tool', this.x, this.z, 6);
       if (ctx.log) ctx.log('Reloading.');

@@ -22,7 +22,7 @@ function makeEl(tag) {
 const document = {
   createElement: makeEl, createElementNS: (ns, tag) => makeEl(tag),
   createTextNode: t => ({ nodeType: 3, textContent: t }),
-  getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+  getElementById: (id) => { const e = makeEl('div'); e.id = id; return e; }, querySelector: () => null, querySelectorAll: () => [],
   addEventListener: noop, removeEventListener: noop, body: makeEl('body'),
   documentElement: makeEl('html'), hidden: false, visibilityState: 'visible',
   exitPointerLock: noop, pointerLockElement: null, fonts: { ready: Promise.resolve() },

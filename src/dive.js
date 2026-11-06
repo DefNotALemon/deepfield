@@ -260,11 +260,14 @@ export class Run {
       c.stacks = (c.contents || []).slice();
       c.taken = [];
       if (!c.hoverPoint) c.hoverPoint = { x: c.x, y: 1.1, z: c.z };
+      // where loot inside this container appears: the builder's lootPoint when it has one, otherwise a
+      // point you can see into rather than the ceiling the hover point refers to
+      if (!c.lootPoint) c.lootPoint = { x: c.x, y: Math.min(c.hoverPoint.y, 1.15), z: c.z };
       // if the builder gave us a tray of real meshes we use it; otherwise we make the loot ourselves
       c.trayMeshes = Array.isArray(c.rig?.tray) ? c.rig.tray : null;
       if (!c.trayMeshes) {
         const g = new THREE.Group();
-        g.position.set(c.hoverPoint.x, c.hoverPoint.y, c.hoverPoint.z);
+        g.position.set(c.lootPoint.x, c.lootPoint.y, c.lootPoint.z);
         c.lootGroup = g;
         this.root.add(g);
       }
@@ -290,6 +293,7 @@ export class Run {
   }
 
   refreshLootMeshes(c) {
+    if (!c.trayMeshes) { /* builder-supplied trays are animated by their own rig */ }
     if (!c.lootGroup) return;
     while (c.lootGroup.children.length) { const ch = c.lootGroup.children.pop(); c.lootGroup.remove(ch); }
     c.trayMeshes = [];
@@ -338,6 +342,10 @@ export class Run {
       // the builder's floor wins over the grid when it has one
     }
     const nav = { heightAt: (x, z) => (this.build.nav && this.build.nav.heightAt ? this.build.nav.heightAt(x, z) : floorHeight(this.site, this.build, x, z)) };
+    // hands first: what you are looking at decides whether a click is a grab, a grab of the world, or a shot
+    this.hoverTick();
+    this.interactTick();
+    this.pickupTick();
     this.player.update(dt, {
       world: this._world(), nav, rng: this.rng, haul: this.haul, pad: this.pad,
       sound: (t, x, z, l) => this.onSound(t, x, z, l), log: (l) => this.hud.log(l, 'self'),
@@ -391,11 +399,8 @@ export class Run {
       this.arriveRival();
     }
 
-    // interaction, hauling, extraction
-    this.hoverTick();
-    this.interactTick();
+    // hauling, extraction and the aftermath of the frame
     this.duffelTick(dt);
-    this.pickupTick();
     this.extractTick(dt);
     this.fxTick(dt);
 
@@ -469,49 +474,60 @@ export class Run {
   // ── what the crosshair is on ─────────────────────────────────────────────────────────────
   hoverTick() {
     const eye = this.player.eyePos();
-    const tr = traceShot(this._world(), eye, this.player.lookDir(), 3.2, { skipPlayer: true });
+    const look = new THREE.Vector3(...this.player.lookDir());
     this.hoverTarget = null;
-    // containers
+    // containers: nearest one you are actually looking at, that you can actually see (no shelving or
+    // bulkhead in between). The container's own collider is ignored for its own point so the loot inside
+    // it is reachable.
     let best = null, bd = 999;
     for (const c of this.containers) {
-      const d = Math.hypot(c.hitBox.x - this.player.x, c.hitBox.z - this.player.z);
-      if (d < (c.hitBox.r + 1.2) && d < bd) {
-        const dir = new THREE.Vector3(c.hoverPoint.x - eye.x, c.hoverPoint.y - eye.y, c.hoverPoint.z - eye.z).normalize();
-        const dot = dir.dot(new THREE.Vector3(...this.player.lookDir()));
-        if (dot > 0.86) { bd = d; best = { kind: 'container', ref: c, dot }; }
-      }
+      const p = c.lootPoint || c.hoverPoint;
+      const d = Math.hypot(p.x - eye.x, p.z - eye.z);
+      if (d > 6) continue;
+      const dir = new THREE.Vector3(p.x - eye.x, p.y - eye.y, p.z - eye.z);
+      const len = dir.length() || 1;
+      const dot = (dir.x * look.x + dir.y * look.y + dir.z * look.z) / len;
+      if (dot < 0.86 || d >= bd) continue;
+      if (!this.visiblePoint(eye, p, c.collider)) continue;
+      bd = d; best = { kind: 'container', ref: c, dot };
     }
     // loose items in an open container
     if (best && best.ref.opened > 0.45 && best.ref.trayMeshes) {
-      let bi = null, bdot = 0.93;
+      let bi = null, bdot = 0.9;
       for (const m of best.ref.trayMeshes) {
-        if (m.userData.taken) continue;
-        const wp = new THREE.Vector3(); m.getWorldPosition(wp);
+        const mesh = m.mesh || m;
+        if (mesh.userData.taken) continue;
+        const wp = new THREE.Vector3(); mesh.getWorldPosition(wp);
         const dir = new THREE.Vector3(wp.x - eye.x, wp.y - eye.y, wp.z - eye.z).normalize();
-        const dot = dir.dot(new THREE.Vector3(...this.player.lookDir()));
-        if (dot > bdot) { bdot = dot; bi = m; }
+        const dot = dir.dot(look);
+        if (dot > bdot) { bdot = dot; bi = mesh; }
       }
       if (bi) best = { kind: 'loot', ref: best.ref, mesh: bi, item: bi.userData.item, dot: bdot };
     }
-    // world pickups
+    // world pickups (something you dropped, or something a rival dropped)
     for (const p of this.pickups) {
-      const d = Math.hypot(p.x - this.player.x, p.z - this.player.z);
-      if (d < 2.4) {
-        const dir = new THREE.Vector3(p.x - eye.x, p.y + 0.15 - eye.y, p.z - eye.z).normalize();
-        const dot = dir.dot(new THREE.Vector3(...this.player.lookDir()));
-        if (dot > 0.9 && (!best || d < bd)) { best = { kind: 'pickup', ref: p, dot }; bd = d; }
-      }
+      const pt = { x: p.x, y: p.y + 0.15, z: p.z };
+      const d = Math.hypot(pt.x - eye.x, pt.z - eye.z);
+      if (d > 3.2 || d >= bd) continue;
+      const dir = new THREE.Vector3(pt.x - eye.x, pt.y - eye.y, pt.z - eye.z).normalize();
+      if (dir.dot(look) < 0.9) continue;
+      if (!this.visiblePoint(eye, pt, null)) continue;
+      best = { kind: 'pickup', ref: p, dot: 1 }; bd = d;
     }
-    // people
-    const focusCrew = this.nearestOf(this.crew, this.player.x, this.player.z, 2.6);
-    if (focusCrew) {
-      const dir = new THREE.Vector3(focusCrew.x - eye.x, (focusCrew.y + 1.4) - eye.y, focusCrew.z - eye.z).normalize();
-      const dot = dir.dot(new THREE.Vector3(...this.player.lookDir()));
-      if (dot > 0.9 && !best) best = { kind: 'crew', ref: focusCrew, dot };
+    // people: you have to be looking at their chest, not their boots
+    for (const n of this.crew) {
+      if (n.dead || n.gone) continue;
+      const pt = { x: n.x, y: (n.y || 0) + 1.35, z: n.z };
+      const d = Math.hypot(pt.x - eye.x, pt.z - eye.z);
+      if (d > 3.4 || d >= bd) continue;
+      const dir = new THREE.Vector3(pt.x - eye.x, pt.y - eye.y, pt.z - eye.z).normalize();
+      if (dir.dot(look) < 0.9) continue;
+      if (!this.visiblePoint(eye, pt, null)) continue;
+      best = { kind: 'crew', ref: n, dot: 1 }; bd = d;
     }
-    const focusDoor = this.doors.find(d => Math.hypot((d.x ?? 0) - this.player.x, (d.z ?? 0) - this.player.z) < 2.3 && !best);
+    const focusDoor = this.doors.find(d => Math.hypot((d.x ?? 0) - this.player.x, (d.z ?? 0) - this.player.z) < 2.6 && !best);
     if (focusDoor && this.aimingAt(focusDoor, 0.9)) best = { kind: 'door', ref: focusDoor };
-    const focusBreaker = this.breakers.find(b => Math.hypot(b.x - this.player.x, b.z - this.player.z) < 2.3 && !best);
+    const focusBreaker = this.breakers.find(b => Math.hypot(b.x - this.player.x, b.z - this.player.z) < 2.6 && !best);
     if (focusBreaker && this.aimingAt(focusBreaker, 0.9)) best = { kind: 'breaker', ref: focusBreaker };
     const ex = this.site.exfil || this.site.spawn;
     if (ex && Math.hypot(ex.x - this.player.x, ex.z - this.player.z) < 2.6) best = { kind: 'extract', ref: ex };
@@ -563,6 +579,17 @@ export class Run {
     return true;
   }
 
+  // Is there a clear line from your eyes to this point? Exact slab test, with one collider (usually the
+  // container's own box) ignored so the loot inside it is still reachable.
+  visiblePoint(eye, p, ignore) {
+    const cols = ignore ? this.build.colliders.filter(c => c !== ignore) : this.build.colliders;
+    const dir = [p.x - eye.x, p.y - eye.y, p.z - eye.z];
+    const len = Math.hypot(dir[0], dir[1], dir[2]) || 1;
+    dir[0] /= len; dir[1] /= len; dir[2] /= len;
+    const tr = traceShot({ colliders: cols, foes: [], crew: [] }, eye, dir, len - 0.12, { skipPlayer: true });
+    return !tr.hit;
+  }
+
   aimingAt(o, dot = 0.9) {
     const eye = this.player.eyePos();
     const dir = new THREE.Vector3((o.x ?? 0) - eye.x, (o.y ?? 1.2) - eye.y, (o.z ?? 0) - eye.z).normalize();
@@ -578,6 +605,8 @@ export class Run {
     if (!pressed) return;
     const h = this.hoverTarget;
     In.pressed.interact = false;
+    // taking something with your hands is not also a gunshot this frame
+    In.pressed.fire = false; In.down.fire = false;
     switch (h.kind) {
       case 'container': {
         const c = h.ref;
@@ -768,6 +797,27 @@ export class Run {
     if (ren.includes('portside')) opts.push('The port decks are busy tonight. Men with cases, not cargo.');
     opts.push('The crew here did not ask for any of this. Remember that if you can.');
     return this.rng.pick ? this.rng.pick(opts) : opts[0];
+  }
+
+  // The hazard the incident promises has to be real the moment you step in: gas that has already taken
+  // the room it started in, a breach that is still venting, a fire that is still burning, or a deck the
+  // breaker left dark.
+  setupHazards() {
+    this.gassed = new Map();
+    const first = this.hazards[0];
+    for (const h of this.hazards) {
+      const room = this.site.rooms[h.roomId] || (this.site.rooms || []).find(r => Math.hypot((r.cx ?? 0) - h.x, (r.cz ?? 0) - h.z) < 3);
+      if (!room) continue;
+      h.roomId = room.id;
+      if (h.kind === 'gas') {
+        this.gassed.set(room.id, 0.7);
+        for (const r of this.site.rooms) if (r.id !== room.id && Math.hypot((r.cx ?? 0) - (room.cx ?? 0), (r.cz ?? 0) - (room.cz ?? 0)) < 12) this.gassed.set(r.id, 0.15);
+      }
+      if (h.kind === 'dark') {
+        for (const l of (this.build.lights || [])) if (l.roomId === room.id && l.set) { try { l.set(false); } catch {} }
+      }
+    }
+    this.hazardStart = this.hazards.length ? (this.site.rooms[first.roomId] || {}).kind : null;
   }
 
   tickHazards(dt) {

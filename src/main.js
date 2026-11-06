@@ -223,8 +223,13 @@ function loop(now) {
   last = now;
   app.frames++;
   pollInput();
-  if (In.consume().back2 && app.mode !== 'title' && app.mode !== 'cruise') {
+  if (In.pressed.back2 && app.mode !== 'title' && app.mode !== 'cruise') {
+    In.pressed.back2 = false;
     if (app.tablet.isOpen()) app.tablet.hide(); else togglePause();
+  }
+  if (In.pressed.tablet && app.mode !== 'title' && app.mode !== 'cruise' && !app.modal) {
+    In.pressed.tablet = false;
+    app.tablet.show(app.mode === 'dive' ? 'help' : 'board');
   }
   if (app.mode === 'title') { app.renderer.render(app.scene, dummyCam()); return; }
   if (app.mode === 'hub' && app.hub) {
