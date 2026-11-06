@@ -51,6 +51,7 @@ export class Player {
     this.gunMesh = null;
     this.hitBuckets = null;
     this.lastStepSound = 0;
+    this.showHands = true;
   }
 
   // ── setup ────────────────────────────────────────────────────────────────────────────────
@@ -210,11 +211,20 @@ export class Player {
     }
     const walkSway = Math.sin(this.stepPhase * Math.PI * 2) * clamp(this.speed / 5, 0, 1);
     this.handRoot.position.set(this.viewLag.x * 0.5 + walkSway * 0.012, this.viewLag.y * 0.5 + Math.abs(walkSway) * 0.01 - dip * 0.5, 0);
+    // the viewmodel has its own light: a gun and a pair of gloves in an unlit corridor are a black blob
+    if (!this.viewLight) {
+      this.viewLight = new THREE.PointLight(0xffe8c8, 0.9, 3.4, 1.6);
+      this.viewLight.position.set(0.1, 0.15, 0.1);
+      this.cam.add(this.viewLight);
+    }
+    this.viewLight.intensity = this.showHands ? 0.9 : 0;
+    if (this.gunVis) this.gunVis.visible = this.showHands;
     if (this.hands) {
+      for (const s of ['left', 'right']) this.hands[s].visible = this.showHands;
       const both = busy || ctx.carrying;
       this.hands.left.position.set(both ? -0.22 : -0.05, both ? -0.28 : -0.02, both ? -0.16 : 0);
       this.hands.right.position.set(both ? 0.22 : 0.05, both ? -0.28 : -0.02, both ? -0.16 : 0);
-      this.hands.left.visible = this.hands.right.visible = true;
+      this.hands.left.visible = this.hands.right.visible = !!this.showHands;
       if (this.torch && !busy) { this.hands.left.rotation.x = -0.5; this.hands.left.position.z -= 0.16; }
       else this.hands.left.rotation.x = damp(this.hands.left.rotation.x, 0, 8, dt);
     }

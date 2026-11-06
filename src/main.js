@@ -100,9 +100,10 @@ async function enterHub() {
   await hub.build(app.scene);
   hub.player = new Player();
   hub.player.place(hub.root, { weapon: null });
-  hub.player.x = 0; hub.player.z = -2; hub.player.yaw = Math.PI;
+  hub.player.x = 0; hub.player.z = -3.4; hub.player.yaw = 0; hub.player.y = 0;
   hub.player.buildIndex(hub.colliders, 6);
   hub.player.torch = true;
+  hub.player.showHands = false;          // no gun at home: the yard is a place, not a firefight
   app.mode = 'hub';
   refreshBoard();
   showHints(['You are at the Waystop. The board has work, the Exchange buys and sells, and the Office is where you find out what you owe.']);
@@ -132,6 +133,7 @@ async function enterDive(cruiseResult = {}) {
   app.run = run;
   globalThis.__df.run = run;
   await run.build(app.scene, app.renderer);
+  showHints([]);
   if (cruiseResult.insight) run.hud.log('You know one thing about this site that the payer did not tell you.', 'sys');
   const scar = cruiseResult.scar || 0;
   if (scar) { run.player.hp = clamp(run.player.hp - scar, 20, 100); run.hud.alert(`You come in from the leg already bruised (${scar} damage).`, 5); }

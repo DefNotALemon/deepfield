@@ -7,6 +7,7 @@ import { In } from './input.js';
 import { rng, clamp, damp, money, stamp } from './util.js';
 import { FACTIONS, COMMODITIES } from './data.js';
 import { priceAt, knownAt, newsSince, systemById } from './sim.js';
+import { applyEnvironment } from './envmap.js';
 import * as A from './audio.js';
 
 const PANEL_W = 26, PANEL_D = 16, WALL_H = 3.1;
@@ -60,7 +61,7 @@ export class Hub {
     for (let i = -2; i <= 2; i++) {
       const trough = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.14, 0.5), new THREE.MeshStandardMaterial({ color: 0xfff2d0, emissive: 0xffe6b0, emissiveIntensity: 1.5 }));
       trough.position.set(i * 4.6, WALL_H - 0.06, 0); root.add(trough);
-      const pl = new THREE.PointLight(0xffe8c0, 5.5, 18, 1.7);
+      const pl = new THREE.PointLight(0xffe8c0, 11, 24, 1.6);
       pl.position.set(i * 4.6, WALL_H - 0.4, 0); root.add(pl);
     }
     // walls (with a big window onto the yard on the south side)
@@ -129,8 +130,12 @@ export class Hub {
     }
 
     // hemisphere light so nothing is pure black, plus a low fill from the deck
-    this.hemi = new THREE.HemisphereLight(0x2c3640, 0x0a0c10, 0.5);
+    this.hemi = new THREE.HemisphereLight(0x44546a, 0x181c20, 1.15);
+    this.fill = new THREE.AmbientLight(0x39424c, 0.55);
+    root.add(this.fill);
     root.add(this.hemi);
+    // metals with nothing to reflect are black: the yard gets a sky even though you never see it
+    applyEnvironment(this.app.renderer, scene, root, { maxMetal: 0.16 });
     this.state = 'active';
     A.ambience('hull');
     return this;

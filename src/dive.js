@@ -15,6 +15,7 @@ import { fireShot, applyShot, aimPoint, traceShot, dirFromAngles } from './weapo
 import { siteSpec, objectiveMet, objectiveLine, clockWarn2, clockWarn30, clockDoom, placeJobItem, INCIDENTS } from './contracts.js';
 import { priceAt, notice, credit, pushNews, rivalsAlive, systemById } from './sim.js';
 import * as A from './audio.js';
+import { applyEnvironment } from './envmap.js';
 
 const CLOCK_SECONDS = { vent: 840, burn: 780, housing: 900, scuttle: 780, security: 720, rival: 900, none: 0 };
 
@@ -88,6 +89,9 @@ export class Run {
     this.player.place(root, { weapon: this.startingGun() });
     const spawn = site.spawn || { x: site.w / 2, z: 2 };
     this.player.x = spawn.x + 0.5; this.player.z = spawn.z + 0.5; this.player.yaw = Math.PI;
+    // stand on the deck, not a metre above it: a first frame with the eye inside the ceiling slab is
+    // how a game looks broken on the one screenshot anybody ever takes
+    this.player.y = this.floorAt(this.player.x, this.player.z);
     this.player.buildIndex(build.colliders || [], 6);
     this.haul = new Haul({ slots: this.career.gear.bagSlots || 5 });
     this.duffel = new Duffel(this.haul);
@@ -95,13 +99,25 @@ export class Run {
     root.add(this.duffel.root);
 
     scene.background = new THREE.Color(0x05070a);
-    scene.fog = new THREE.FogExp2(0x05070a, 0.012);
-    this.amb = new THREE.HemisphereLight(0x2a3540, 0x0a0c10, 0.35);
+    scene.fog = new THREE.FogExp2(0x05070a, 0.0075);
+    // an interior is lit by its own fixtures. The generator's lamps are correct in placement but tuned
+    // for a daylight scene, so the run lifts them: a corridor you cannot read is not atmospheric, it is
+    // broken.
+    if (build.lights) {
+      for (const l of build.lights) {
+        const real = l._pl || (l.light);
+        if (real) { real.intensity = (real.intensity || 6) * 3.6; real.distance = (real.distance || 8) * 1.7; }
+      }
+    }
+    this.amb = new THREE.HemisphereLight(0x3d4a58, 0x14181c, 0.55);
     root.add(this.amb);
-    this.sun = new THREE.DirectionalLight(0x8fa8c0, 0.25);
+    this.fill = new THREE.AmbientLight(0x27303a, 0.4);
+    root.add(this.fill);
+    this.sun = new THREE.DirectionalLight(0x8fa8c0, 0.22);
     this.sun.position.set(30, 60, 20);
     root.add(this.sun);
-    if (build.lights) { for (const l of build.lights) if (l.on !== false) this.amb.intensity += 0.001; }
+    this.setupEnvironment(build);
+    this.setupLightPool();
 
     // people who live here, and the ones who are the problem
     if (lifeMod) {
@@ -132,10 +148,49 @@ export class Run {
     this.intro();
     A.ambience(this.contract.siteKind === 'derelict' ? 'derelict' : 'hull');
     this.objectiveText = objectiveLine(this.contract);
+    // lamp on to start with: the first room of a dead hull is the worst place to learn the key
+    this.player.torch = true;
     return this;
   }
 
   warnInternal(msg) { this.log.push({ t: this.time, line: `[build] ${msg}`, kind: 'sys' }); }
+
+  // Two things make an interior readable in three.js and both are easy to miss:
+  //  (1) a metallic material with nothing to reflect is black, so the site gets an environment;
+  //  (2) a room whose only fixture is a merged emissive mesh has no actual light in it, so the run
+  //      keeps a small pool of real lamps and parks it in the rooms around the player.
+  setupEnvironment(build) {
+    applyEnvironment(this.renderer, this.scene, build.root, { maxMetal: 0.18 });
+  }
+
+  setupLightPool() {
+    this.pool = [];
+    for (let i = 0; i < 8; i++) {
+      const l = new THREE.PointLight(0xffe4bc, 0, 13, 1.7);
+      l.position.set(0, -50, 0);
+      this.root.add(l);
+      this.pool.push(l);
+    }
+    this.poolT = 0;
+  }
+
+  updateLightPool(dt) {
+    if (!this.pool) return;
+    this.poolT -= dt;
+    if (this.poolT > 0) return;
+    this.poolT = 0.4;
+    const rooms = (this.site.rooms || []).map(r => ({
+      r, d: Math.hypot((r.cx ?? 0) - this.player.x, (r.cz ?? 0) - this.player.z),
+      lit: this.lightsOn && (this.gassed.get(r.id) ?? 0) < 0.6,
+    })).sort((a, b) => a.d - b.d);
+    for (let i = 0; i < this.pool.length; i++) {
+      const l = this.pool[i], cand = rooms[i];
+      if (!cand || !cand.lit || cand.d > 46) { l.intensity = 0; continue; }
+      const r = cand.r;
+      l.position.set(r.cx ?? 0, Math.min(2.6, (r.cy ?? 2.6)), r.cz ?? 0);
+      l.intensity = (this.broken?.[r.id] ? 0 : 30) * (1 - Math.min(0.7, (this.gassed.get(r.id) ?? 0) * 0.5));
+    }
+  }
   startingGun() {
     const g = this.career.gear.guns.find(x => x.uid === this.career.gear.gun) || this.career.gear.guns[0] || null;
     return g;
@@ -144,7 +199,7 @@ export class Run {
 
   intro() {
     const c = this.contract;
-    this.hud.log(`Clamped onto ${c.site}. ${c.kind}, ${c.sysName}.`, 'sys');
+    this.hud.log(`Clamped onto ${c.site}. ${c.kind}, ${c.sysName}. Lamp on (${In.label('torch')} to kill it) — light is safety and light is a beacon.`, 'sys');
     this.hud.say(`${c.incident.title} — ${c.job.short}`, 6);
     this.hud.alert(`${c.incident.reason[0].toUpperCase() + c.incident.reason.slice(1)}.`, 6);
     if (this.clock) this.hud.alert(this.clock.name ? `${this.clock.name}: ${fmtClock(this.clock.left)}` : '', 4);
@@ -385,6 +440,7 @@ export class Run {
 
     // the world's hazards: gas spreading, holes in the hull, fires, and the dark
     this.tickHazards(dt);
+    this.updateLightPool(dt);
 
     // the clock
     if (this.clock) {
