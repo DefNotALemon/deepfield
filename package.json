@@ -1,0 +1,8 @@
+{
+  "name": "deepfield",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DEEPFIELD - a space extraction shooter. Live-world contracts, Lethal-Company-style hauls, rivals who can merc you.",
+  "scripts": { "start": "python3 -m http.server 8770" }
+}
